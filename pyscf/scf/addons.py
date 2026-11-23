@@ -77,6 +77,11 @@ def frac_occ_(mf, tol=1e-3):
             frac_occ_lst = numpy.zeros_like(mo_energy, dtype=bool)
         return mo_occ, numpy.where(frac_occ_lst)[0], homo, lumo
 
+    def _frac_occ_grad(mo_coeff, mo_occ, fock_ao):
+        f_mo = reduce(numpy.dot, (mo_coeff.T.conj(), fock_ao, mo_coeff))
+        d_occ = mo_occ[None, :] - mo_occ[:, None]
+        return (d_occ * f_mo)[d_occ > 0]
+
     if mf.istype('UHF'):
         def get_occ(mo_energy, mo_coeff=None):
             nocca, noccb = mol.nelec
@@ -103,7 +108,17 @@ def frac_occ_(mf, tol=1e-3):
                 mo_occ = old_get_occ(mo_energy, mo_coeff)
             return mo_occ
 
+        def get_grad(mo_coeff, mo_occ, fock=None):
+            if fock is None:
+                dm1 = mf.make_rdm1(mo_coeff, mo_occ)
+                fock = mf.get_hcore(mf.mol) + mf.get_veff(mf.mol, dm1)
+            ga = _frac_occ_grad(mo_coeff[0], mo_occ[0], fock[0])
+            gb = _frac_occ_grad(mo_coeff[1], mo_occ[1], fock[1])
+            return numpy.hstack((ga, gb))
+
     elif mf.istype('ROHF'):
+        last_rohf_occ = [None, None, None]
+
         def get_occ(mo_energy, mo_coeff=None):
             nocca, noccb = mol.nelec
             mo_occa, frac_lsta, homoa, lumoa = guess_occ(mo_energy, nocca)
@@ -111,6 +126,7 @@ def frac_occ_(mf, tol=1e-3):
 
             if abs(homoa - lumoa) < tol or abs(homob - lumob) < tol:
                 mo_occ = mo_occa + mo_occb
+                last_rohf_occ[:] = [mo_occ.copy(), mo_occa, mo_occb]
                 if len(frac_lstb):
                     logger.warn(mf, 'fraction occ = %6g for alpha orbitals %s  '
                                 '%6g for beta orbitals %s',
@@ -125,30 +141,37 @@ def frac_occ_(mf, tol=1e-3):
                     logger.debug(mf, '  mo_energy = %s', mo_energy)
             else:
                 mo_occ = old_get_occ(mo_energy, mo_coeff)
+                last_rohf_occ[:] = [None, None, None]
             return mo_occ
 
-        def get_grad(mo_coeff, mo_occ, fock):
-            occidxa = mo_occ > 0
-            occidxb = mo_occ > 1
-            viridxa = ~occidxa
-            viridxb = ~occidxb
-            uniq_var_a = viridxa.reshape(-1,1) & occidxa
-            uniq_var_b = viridxb.reshape(-1,1) & occidxb
-
+        def get_grad(mo_coeff, mo_occ, fock=None):
+            if fock is None:
+                dm1 = mf.make_rdm1(mo_coeff, mo_occ)
+                fock = mf.get_hcore(mf.mol) + mf.get_veff(mf.mol, dm1)
             if getattr(fock, 'focka', None) is not None:
                 focka = fock.focka
                 fockb = fock.fockb
-            elif getattr(fock, 'ndim', None) == 3:
+            elif isinstance(fock, (tuple, list)) or getattr(fock, 'ndim', None) == 3:
                 focka, fockb = fock
             else:
                 focka = fockb = fock
             focka = reduce(numpy.dot, (mo_coeff.T.conj(), focka, mo_coeff))
             fockb = reduce(numpy.dot, (mo_coeff.T.conj(), fockb, mo_coeff))
 
-            g = numpy.zeros_like(focka)
-            g[uniq_var_a]  = focka[uniq_var_a]
-            g[uniq_var_b] += fockb[uniq_var_b]
-            return g[uniq_var_a | uniq_var_b]
+            if (last_rohf_occ[0] is not None
+                    and mo_occ.shape == last_rohf_occ[0].shape
+                    and numpy.allclose(mo_occ, last_rohf_occ[0])):
+                occ_a, occ_b = last_rohf_occ[1], last_rohf_occ[2]
+            elif mol.spin == 0:
+                occ_a = occ_b = 0.5 * mo_occ
+            else:
+                occ_a = numpy.clip(mo_occ, 0.0, 1.0)
+                occ_b = numpy.clip(mo_occ - 1.0, 0.0, 1.0)
+            da = occ_a[None, :] - occ_a[:, None]
+            db = occ_b[None, :] - occ_b[:, None]
+            mask = (da > 0) | ((da == 0) & (db > 0))
+            g = da * focka + db * fockb
+            return g[mask]
 
     elif mf.istype('RHF'):
         def get_occ(mo_energy, mo_coeff=None):
@@ -167,6 +190,12 @@ def frac_occ_(mf, tol=1e-3):
             else:
                 mo_occ = old_get_occ(mo_energy, mo_coeff)
             return mo_occ
+
+        def get_grad(mo_coeff, mo_occ, fock=None):
+            if fock is None:
+                dm1 = mf.make_rdm1(mo_coeff, mo_occ)
+                fock = mf.get_hcore(mf.mol) + mf.get_veff(mf.mol, dm1)
+            return _frac_occ_grad(mo_coeff, mo_occ, fock)
     else:
         def get_occ(mo_energy, mo_coeff=None):
             nocc = mol.nelectron
@@ -180,11 +209,14 @@ def frac_occ_(mf, tol=1e-3):
                 mo_occ = old_get_occ(mo_energy, mo_coeff)
             return mo_occ
 
+        def get_grad(mo_coeff, mo_occ, fock=None):
+            if fock is None:
+                dm1 = mf.make_rdm1(mo_coeff, mo_occ)
+                fock = mf.get_hcore(mf.mol) + mf.get_veff(mf.mol, dm1)
+            return _frac_occ_grad(mo_coeff, mo_occ, fock)
+
     mf.get_occ = get_occ
-    try:
-        mf.get_grad = get_grad
-    except NameError:
-        pass
+    mf.get_grad = get_grad
     return mf
 frac_occ = frac_occ_
 

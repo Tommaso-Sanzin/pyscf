@@ -225,6 +225,27 @@ class KnownValues(unittest.TestCase):
         self.assertTrue(numpy.allclose(mf.mo_occ[:7], [2,2,2,2,2,2,2]))
         mol.stdout.close()
 
+    def test_frac_occ_get_grad(self):
+        mol_c = gto.M(atom='C 0 0 0', basis='sto-3g', verbose=0)
+        for mf_cls in (scf.RHF, scf.ROHF, scf.UHF, scf.GHF):
+            mf_c = addons.frac_occ(mf_cls(mol_c)).run()
+            self.assertAlmostEqual(numpy.linalg.norm(mf_c.get_grad(mf_c.mo_coeff, mf_c.mo_occ)), 0.0, 9)
+        # Non-zero gradient between distinct fractional/double occupancies (RHF C atom)
+        mf_r = addons.frac_occ(scf.RHF(mol_c)).run()
+        t = 0.05
+        c = mf_r.mo_coeff.copy()
+        c[:, 0] = mf_r.mo_coeff[:, 0] * numpy.cos(t) - mf_r.mo_coeff[:, 2] * numpy.sin(t)
+        c[:, 2] = mf_r.mo_coeff[:, 0] * numpy.sin(t) + mf_r.mo_coeff[:, 2] * numpy.cos(t)
+        def e_rot(ang):
+            cc = mf_r.mo_coeff.copy()
+            cc[:, 0] = mf_r.mo_coeff[:, 0] * numpy.cos(ang) - mf_r.mo_coeff[:, 2] * numpy.sin(ang)
+            cc[:, 2] = mf_r.mo_coeff[:, 0] * numpy.sin(ang) + mf_r.mo_coeff[:, 2] * numpy.cos(ang)
+            return mf_r.energy_tot(mf_r.make_rdm1(cc, mf_r.mo_occ))
+        dedt_fd = (e_rot(t + 1e-6) - e_rot(t - 1e-6)) / 2e-6
+        g = mf_r.get_grad(c, mf_r.mo_occ)
+        self.assertGreater(g.size, 0)
+        self.assertAlmostEqual(-2.0 * g[0], dedt_fd, 6)
+
     def test_dynamic_occ(self):
         mol = gto.Mole()
         mol.verbose = 5
