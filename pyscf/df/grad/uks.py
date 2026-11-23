@@ -121,10 +121,9 @@ def get_veff(ks_grad, mol=None, dm=None):
                 vk.aux *= hyb
             vklr = ks_grad.get_k(mol, dm, omega=omega)
             vklr[:] *= (alpha - hyb)
-            if ks_grad.auxbasis_response:
-                vklr.aux *= (alpha - hyb)
             vk[:] += vklr
-            vk.aux[:] += vklr.aux[:]
+            if ks_grad.auxbasis_response:
+                vk.aux[:] += vklr.aux * (alpha - hyb)
         vxc += vj[0] + vj[1] - vk
         if ks_grad.auxbasis_response:
             e1_aux = vj.aux.sum((0,1))

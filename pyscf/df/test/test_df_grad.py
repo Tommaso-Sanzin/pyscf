@@ -187,8 +187,17 @@ class KnownValues(unittest.TestCase):
         mol.verbose = 0
         mol.build()
         gref = mol.UKS(xc='camb3lyp').run().nuc_grad_method().kernel()
-        g1 = mol.UKS(xc='camb3lyp').density_fit().run().nuc_grad_method().kernel()
+        mf = mol.UKS(xc='camb3lyp').density_fit().run()
+        g1 = mf.nuc_grad_method().kernel()
         self.assertAlmostEqual(abs(gref - g1).max(), 0, 4)
+        g_noaux = mf.nuc_grad_method().set(auxbasis_response=False).kernel()
+        self.assertAlmostEqual(abs(g1 - g_noaux).max(), 0, 3)
+
+    def test_rks_rsh_grad_no_auxbasis_response(self):
+        mf = mol.RKS(xc='camb3lyp').density_fit().run()
+        g1 = mf.nuc_grad_method().kernel()
+        g_noaux = mf.nuc_grad_method().set(auxbasis_response=False).kernel()
+        self.assertAlmostEqual(abs(g1 - g_noaux).max(), 0, 3)
 
     def test_casscf_grad(self):
         gref = mcscf.CASSCF (mol.RHF.run (), 8, 6).run ().nuc_grad_method().kernel()
